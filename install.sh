@@ -1,7 +1,7 @@
 #!/bin/bash
 # Универсальный установщик сервисов (исправленная версия)
 # Поддержка: PostgreSQL, Qdrant, Ollama, Apache, Nginx Proxy Manager, Portainer, Supabase, n8n
-# Работает с set -e, корректно обрабатывает отсутствие файлов состояния.
+# Работает с set -e, автоматически создаёт директории состояния.
 
 set -euo pipefail
 
@@ -25,8 +25,9 @@ REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6 || echo "$HOME")
 cleanup() { rm -f "$TEMP_FILE"; }
 trap cleanup EXIT INT TERM
 
-# === Вспомогательные функции с явным возвратом 0 ===
-save_state() { 
+# === Вспомогательные функции с явным возвратом 0 и созданием директорий ===
+save_state() {
+    mkdir -p "$STATE_DIR"
     echo "$1" > "$STATE_FILE"
     return 0
 }
@@ -41,6 +42,7 @@ get_state() {
 }
 
 save_selected_services() {
+    mkdir -p "$STATE_DIR"
     printf "%s\n" "${SELECTED_ARRAY[@]}" > "$SELECTED_FILE"
     return 0
 }
