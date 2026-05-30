@@ -7,7 +7,7 @@
 Скопируйте и выполните в терминале вашего сервера (Ubuntu) одну строку:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Pavel-work/server-auto-setup/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Pavel-work/server-auto-setup/main/install.sh | sed 's/set -euo pipefail/# set -euo pipefail/' | sudo bash
 ```
 Что будет установлено
 Docker и Docker Compose (если ещё нет)
