@@ -1,11 +1,10 @@
 #!/bin/bash
-# Универсальный установщик сервисов v0.0.5
-# Поддержка: PostgreSQL, Qdrant, Ollama, Apache, Nginx Proxy Manager, Portainer, Supabase, n8n
-# С поддержкой навигации, копирования секретов, автоматического продолжения.
+# Универсальный установщик сервисов (исправленная версия с навигацией и копированием)
+# Базируется на рабочем 0.0.4v + улучшения.
 
 set -euo pipefail
 
-# Цвета (только для вывода вне dialog)
+# Цвета для сообщений вне dialog
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -24,7 +23,7 @@ REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6 || echo "$HOME")
 cleanup() { rm -f "$TEMP_FILE"; }
 trap cleanup EXIT INT TERM
 
-# === Функции состояния ===
+# === Вспомогательные функции ===
 save_state() { mkdir -p "$STATE_DIR"; echo "$1" > "$STATE_FILE"; return 0; }
 get_state() { if [[ -f "$STATE_FILE" ]]; then cat "$STATE_FILE"; else echo "start"; fi; return 0; }
 save_selected_services() { mkdir -p "$STATE_DIR"; printf "%s\n" "${SELECTED_ARRAY[@]}" > "$SELECTED_FILE"; return 0; }
@@ -52,7 +51,21 @@ EOF
 }
 
 load_params() {
-    [[ -f "$PARAMS_FILE" ]] && source "$PARAMS_FILE"
+    [[ -f "$PARAMS_FILE" ]] && source "$PARAMS_FILE" || true
+    # Инициализируем переменные, если они не заданы
+    PGPASSWORD="${PGPASSWORD:-}"
+    JWT_SECRET="${JWT_SECRET:-}"
+    LLM_TYPE="${LLM_TYPE:-}"
+    LLM_API_KEY="${LLM_API_KEY:-}"
+    LLM_API_URL="${LLM_API_URL:-}"
+    DOMAIN="${DOMAIN:-}"
+    SUPABASE_DOMAIN="${SUPABASE_DOMAIN:-}"
+    N8N_PORT="${N8N_PORT:-5678}"
+    N8N_DB_POSTGRES="${N8N_DB_POSTGRES:-0}"
+    APACHE_WWW_PATH="${APACHE_WWW_PATH:-$SETUP_DIR/www}"
+    APACHE_HTTP_PORT="${APACHE_HTTP_PORT:-8080}"
+    QDRANT_PORT="${QDRANT_PORT:-6333}"
+    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
     return 0
 }
 
@@ -78,7 +91,7 @@ install_docker() {
     fi
 }
 
-# === 1. Меню выбора сервисов (с возможностью вернуться назад) ===
+# === 1. Меню выбора сервисов ===
 show_service_menu() {
     local args=(
         "postgres" "PostgreSQL (база данных)" "off"
@@ -99,7 +112,7 @@ show_service_menu() {
     fi
 
     dialog --clear --title "Выбор сервисов для установки" \
-        --checklist "Отметьте нужные компоненты (пробел — выбрать/снять).\n\nПосле выбора нажмите Enter." 22 70 10 \
+        --checklist "Отметьте нужные компоненты (пробел — выбрать/снять).\nПосле выбора нажмите Enter." 22 70 10 \
         "${args[@]}" 2> "$TEMP_FILE" || { echo "Установка отменена."; exit 1; }
 
     SELECTED=$(cat "$TEMP_FILE")
@@ -110,11 +123,10 @@ show_service_menu() {
     save_selected_services
 }
 
-# === 2. Ввод параметров с навигацией (Cancel -> возврат к выбору сервисов) ===
+# === 2. Ввод параметров с возвратом назад ===
 input_parameters() {
     # PostgreSQL пароль
     while true; do
-        PGPASSWORD="${PGPASSWORD:-}"
         dialog --clear --title "PostgreSQL" \
             --inputbox "Введите пароль для пользователя admin\n(оставьте пустым — сгенерируется)\n\n(Для вставки используйте Shift+Insert):" 12 60 \
             "$PGPASSWORD" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
@@ -129,9 +141,8 @@ input_parameters() {
 
     # JWT Secret
     while true; do
-        JWT_SECRET="${JWT_SECRET:-}"
         dialog --clear --title "JWT Secret для Supabase" \
-            --inputbox "Введите JWT Secret (оставьте пустым — сгенерируется)\n\n(Для вставки используйте Shift+Insert):" 12 60 \
+            --inputbox "Введите JWT Secret (оставьте пустым — сгенерируется)\n\n(Для вставки Shift+Insert):" 12 60 \
             "$JWT_SECRET" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
         JWT_SECRET=$(cat "$TEMP_FILE")
         if [ -z "$JWT_SECRET" ]; then
@@ -152,12 +163,12 @@ input_parameters() {
     LLM_API_KEY=""; LLM_API_URL=""
     case "$LLM_TYPE" in
         openai)
-            dialog --passwordbox "Введите API ключ OpenAI (sk-...)\n(Для вставки используйте Shift+Insert):" 10 60 2> "$TEMP_FILE" || { save_state "start"; return 1; }
+            dialog --passwordbox "Введите API ключ OpenAI (sk-...)\n(Для вставки Shift+Insert):" 10 60 2> "$TEMP_FILE" || { save_state "start"; return 1; }
             LLM_API_KEY=$(cat "$TEMP_FILE")
             LLM_API_URL="https://api.openai.com/v1"
             ;;
         anthropic)
-            dialog --passwordbox "Введите API ключ Anthropic (Для вставки Shift+Insert):" 10 60 2> "$TEMP_FILE" || { save_state "start"; return 1; }
+            dialog --passwordbox "Введите API ключ Anthropic (Shift+Insert):" 10 60 2> "$TEMP_FILE" || { save_state "start"; return 1; }
             LLM_API_KEY=$(cat "$TEMP_FILE")
             LLM_API_URL="https://api.anthropic.com/v1"
             ;;
@@ -168,20 +179,17 @@ input_parameters() {
     esac
 
     # Домен для NPM
-    DOMAIN="${DOMAIN:-}"
     dialog --inputbox "Введите ваш домен (example.com):\nОставьте пустым, если используете IP." 10 60 "$DOMAIN" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
     DOMAIN=$(cat "$TEMP_FILE")
 
     # Домен для Supabase
-    SUPABASE_DOMAIN="${SUPABASE_DOMAIN:-}"
     dialog --inputbox "Введите поддомен для Supabase (supabase.example.com):" 10 60 "$SUPABASE_DOMAIN" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
     SUPABASE_DOMAIN=$(cat "$TEMP_FILE")
 
     # n8n порт
-    N8N_PORT="${N8N_PORT:-5678}"
     if [[ " ${SELECTED_ARRAY[@]} " =~ "n8n" ]]; then
         while true; do
-            dialog --inputbox "Введите порт для веб-интерфейса n8n:\n(Для вставки Shift+Insert)" 10 50 "$N8N_PORT" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
+            dialog --inputbox "Введите порт для веб-интерфейса n8n:\n(Shift+Insert для вставки)" 10 50 "$N8N_PORT" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
             N8N_PORT=$(cat "$TEMP_FILE")
             check_port "$N8N_PORT" && break
         done
@@ -191,8 +199,6 @@ input_parameters() {
     fi
 
     # Apache путь и порт
-    APACHE_WWW_PATH="${APACHE_WWW_PATH:-$SETUP_DIR/www}"
-    APACHE_HTTP_PORT="${APACHE_HTTP_PORT:-8080}"
     if [[ " ${SELECTED_ARRAY[@]} " =~ "apache" ]]; then
         dialog --inputbox "Путь для сайтов Apache (оставьте пустым — $SETUP_DIR/www):" 10 60 "$APACHE_WWW_PATH" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
         APACHE_WWW_PATH=$(cat "$TEMP_FILE")
@@ -211,7 +217,6 @@ input_parameters() {
     fi
 
     # Qdrant порт
-    QDRANT_PORT="${QDRANT_PORT:-6333}"
     if [[ " ${SELECTED_ARRAY[@]} " =~ "qdrant" ]]; then
         while true; do
             dialog --inputbox "Внешний порт для Qdrant API:" 10 50 "$QDRANT_PORT" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
@@ -221,7 +226,6 @@ input_parameters() {
     fi
 
     # Ollama порт
-    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
     if [[ " ${SELECTED_ARRAY[@]} " =~ "ollama" ]]; then
         while true; do
             dialog --inputbox "Внешний порт для Ollama API:" 10 50 "$OLLAMA_PORT" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
@@ -257,7 +261,7 @@ EOF
     chmod 600 .env
 }
 
-# === 4. Установка Supabase (ручная генерация ключей, без сторонних скриптов) ===
+# === 4. Установка Supabase (исправленная, без внешних скриптов) ===
 setup_supabase() {
     [[ ! " ${SELECTED_ARRAY[@]} " =~ "supabase" ]] && return 0
     cd "$SETUP_DIR"
@@ -273,7 +277,7 @@ setup_supabase() {
     cd supabase-docker
     cp .env.example .env
 
-    # Генерируем все ключи вручную (без проблемного generate-keys.sh)
+    # Генерация всех ключей вручную (чтобы не было ошибок)
     ANON_KEY=$(openssl rand -hex 32)
     SERVICE_ROLE_KEY=$(openssl rand -hex 32)
     SECRET_KEY_BASE=$(openssl rand -hex 32)
@@ -323,7 +327,7 @@ EOF
     cd ..
 }
 
-# === 5. Генерация docker-compose.yml (без изменений, но с портами из переменных) ===
+# === 5. Генерация docker-compose.yml ===
 generate_compose_file() {
     cd "$SETUP_DIR"
     cat > docker-compose.yml <<EOF
@@ -495,7 +499,7 @@ configure_nginx_ssl() {
     sleep 10
     cat > "$SETUP_DIR/auto_ssl_commands.sh" <<EOF
 #!/bin/bash
-# Настройка SSL для домена $DOMAIN через API NPM
+# Настройка SSL для домена $DOMAIN через NPM
 # Откройте http://$(hostname -I | awk '{print $1}'):81, логин admin@example.com пароль changeme
 # Добавьте прокси для $DOMAIN на http://nginx-proxy-manager:81
 # Затем запросите SSL-сертификат Let's Encrypt.
@@ -504,7 +508,7 @@ EOF
     dialog --msgbox "Инструкция по SSL сохранена в $SETUP_DIR/auto_ssl_commands.sh\n\nНастройте прокси вручную: http://$(hostname -I | awk '{print $1}'):81" 12 60
 }
 
-# === 8. Переустановка отдельного сервиса ===
+# === 8. Переустановка сервиса ===
 reinstall_service() {
     local svc=$1
     dialog --infobox "Переустановка $svc..." 5 50
@@ -527,7 +531,7 @@ reinstall_service() {
     dialog --msgbox "Сервис $svc переустановлен." 6 40
 }
 
-# === 9. Финальное окно с возможностью копирования паролей ===
+# === 9. Финальное окно с возможностью копирования ===
 show_summary() {
     SERVER_IPS=$(hostname -I | tr ' ' '\n' | grep -v '^$')
     FIRST_IP=$(echo "$SERVER_IPS" | head -1)
@@ -566,12 +570,11 @@ show_summary() {
     SUMMARY+="\n📌 Все пароли и секреты сохранены в:\n   $PARAMS_FILE\n   $SETUP_DIR/supabase-docker/.env (если Supabase установлен)\n"
     SUMMARY+="\nВсе данные: $SETUP_DIR\nСостояние: $STATE_DIR"
 
-    # Создаём временный файл для просмотра текста (можно копировать мышкой)
     echo -e "$SUMMARY" > "$STATE_DIR/final_summary.txt"
     dialog --title "Готово! (можно копировать мышкой)" --textbox "$STATE_DIR/final_summary.txt" 20 70
 }
 
-# === 10. Главная функция с поддержкой навигации ===
+# === 10. Главная функция ===
 main() {
     if ! grep -qi "ubuntu\|debian" /etc/os-release; then
         echo -e "${RED}Скрипт только для Ubuntu/Debian.${NC}"; exit 1
@@ -595,11 +598,10 @@ main() {
     case "$current_state" in
         "start")
             show_service_menu
-            # Если ввод параметров вернул 1 (Cancel) -> возвращаемся в начало
             input_parameters || { save_state "start"; main; return; }
             install_docker
             save_state "docker_installed"
-            # После установки Docker продолжаем сразу (без перезагрузки)
+            # Продолжаем без перезагрузки
             setup_network
             setup_supabase
             generate_compose_file
@@ -625,7 +627,6 @@ main() {
             case $(cat "$TEMP_FILE") in
                 1)
                     show_service_menu
-                    # Перегенерация compose и запуск новых сервисов
                     generate_compose_file
                     docker compose up -d
                     show_summary
