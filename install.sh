@@ -1,12 +1,16 @@
 #!/bin/bash
-# Оригинальный рабочий скрипт 0.0.4v (исправлен только баг с PGPASSWORD_ESC)
+# Универсальный установщик сервисов v1.0 (рабочий)
+# Поддержка: PostgreSQL, Qdrant, Ollama, Apache, Nginx Proxy Manager, Portainer, Supabase, n8n
+
 set -euo pipefail
 
+# Цвета для вывода вне dialog (опционально)
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
+# === Глобальные переменные ===
 STATE_DIR="/root/.server-setup-state"
 STATE_FILE="$STATE_DIR/state.cfg"
 SELECTED_FILE="$STATE_DIR/selected_services.cfg"
@@ -14,15 +18,16 @@ PARAMS_FILE="$STATE_DIR/params.env"
 SETUP_DIR="/root/server-setup"
 TEMP_FILE=$(mktemp)
 REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6 || echo "$HOME")
 
 cleanup() { rm -f "$TEMP_FILE"; }
 trap cleanup EXIT INT TERM
 
-save_state() { mkdir -p "$STATE_DIR"; echo "$1" > "$STATE_FILE"; return 0; }
-get_state() { if [[ -f "$STATE_FILE" ]]; then cat "$STATE_FILE"; else echo "start"; fi; return 0; }
-save_selected_services() { mkdir -p "$STATE_DIR"; printf "%s\n" "${SELECTED_ARRAY[@]}" > "$SELECTED_FILE"; return 0; }
-load_selected_services() { SELECTED_ARRAY=(); [[ -f "$SELECTED_FILE" ]] && mapfile -t SELECTED_ARRAY < "$SELECTED_FILE"; return 0; }
+# === Функции сохранения/загрузки состояния ===
+save_state() { mkdir -p "$STATE_DIR"; echo "$1" > "$STATE_FILE"; }
+get_state() { if [[ -f "$STATE_FILE" ]]; then cat "$STATE_FILE"; else echo "start"; fi; }
+
+save_selected_services() { mkdir -p "$STATE_DIR"; printf "%s\n" "${SELECTED_ARRAY[@]}" > "$SELECTED_FILE"; }
+load_selected_services() { SELECTED_ARRAY=(); [[ -f "$SELECTED_FILE" ]] && mapfile -t SELECTED_ARRAY < "$SELECTED_FILE"; }
 
 save_params() {
     mkdir -p "$STATE_DIR"
@@ -42,7 +47,6 @@ QDRANT_PORT="$QDRANT_PORT"
 OLLAMA_PORT="$OLLAMA_PORT"
 EOF
     chmod 600 "$PARAMS_FILE"
-    return 0
 }
 
 load_params() {
@@ -50,7 +54,20 @@ load_params() {
         # shellcheck source=/dev/null
         source "$PARAMS_FILE"
     fi
-    return 0
+    # Устанавливаем значения по умолчанию, если переменные не определены
+    PGPASSWORD="${PGPASSWORD:-}"
+    JWT_SECRET="${JWT_SECRET:-}"
+    LLM_TYPE="${LLM_TYPE:-}"
+    LLM_API_KEY="${LLM_API_KEY:-}"
+    LLM_API_URL="${LLM_API_URL:-}"
+    DOMAIN="${DOMAIN:-}"
+    SUPABASE_DOMAIN="${SUPABASE_DOMAIN:-}"
+    N8N_PORT="${N8N_PORT:-5678}"
+    N8N_DB_POSTGRES="${N8N_DB_POSTGRES:-0}"
+    APACHE_WWW_PATH="${APACHE_WWW_PATH:-$SETUP_DIR/www}"
+    APACHE_HTTP_PORT="${APACHE_HTTP_PORT:-8080}"
+    QDRANT_PORT="${QDRANT_PORT:-6333}"
+    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
 }
 
 check_port() {
@@ -66,16 +83,16 @@ install_docker() {
     if ! command -v docker &> /dev/null; then
         dialog --infobox "Установка Docker (займёт минуту)..." 5 50
         curl -fsSL https://get.docker.com | sh
-        usermod -aG docker "$REAL_USER"
-        dialog --msgbox "Docker установлен.\nПерезайдите в систему (или перезагрузите сервер) и запустите скрипт снова.\n\nПосле перезагрузки запустите: sudo $0" 10 60
-        exit 0
+        usermod -aG docker "$REAL_USER" || true
+        systemctl enable docker --now
+        dialog --msgbox "Docker установлен и запущен.\nПерезагрузка не требуется." 8 50
     fi
     if ! docker compose version &> /dev/null; then
         apt-get install -y docker-compose-plugin
     fi
-    systemctl enable docker --now
 }
 
+# === 1. Меню выбора сервисов ===
 show_service_menu() {
     local args=(
         "postgres" "PostgreSQL (база данных)" "off"
@@ -87,6 +104,7 @@ show_service_menu() {
         "supabase" "Supabase (полный self-hosted)" "off"
         "n8n" "n8n (автоматизация)" "off"
     )
+    # Включаем ранее выбранные
     if [ ${#SELECTED_ARRAY[@]} -gt 0 ]; then
         for ((i=0; i<${#args[@]}; i+=3)); do
             for sel in "${SELECTED_ARRAY[@]}"; do
@@ -96,9 +114,8 @@ show_service_menu() {
     fi
 
     dialog --clear --title "Выбор сервисов для установки" \
-        --checklist "Отметьте нужные компоненты (пробел — выбрать/снять)." 22 70 10 \
-        "${args[@]}" 2> "$TEMP_FILE"
-    [ $? -ne 0 ] && { echo "Установка отменена."; exit 1; }
+        --checklist "Отметьте нужные компоненты (пробел — выбрать/снять).\nПосле выбора нажмите Enter." 22 70 10 \
+        "${args[@]}" 2> "$TEMP_FILE" || { echo "Установка отменена."; exit 1; }
 
     SELECTED=$(cat "$TEMP_FILE")
     SELECTED_ARRAY=()
@@ -108,70 +125,74 @@ show_service_menu() {
     save_selected_services
 }
 
+# === 2. Ввод параметров с возможностью возврата назад ===
 input_parameters() {
     # PostgreSQL пароль
-    PGPASSWORD="${PGPASSWORD:-}"
-    while [ -z "$PGPASSWORD" ]; do
+    while true; do
         dialog --clear --title "PostgreSQL" \
-            --inputbox "Введите пароль для пользователя admin\n(оставьте пустым — сгенерируется)\n\n(Для вставки используйте Shift+Insert):" 12 50 \
-            2> "$TEMP_FILE" || exit 1
+            --inputbox "Введите пароль для пользователя admin\n(оставьте пустым — сгенерируется)\n\n(Для вставки используйте Shift+Insert):" 12 60 \
+            "$PGPASSWORD" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
         PGPASSWORD=$(cat "$TEMP_FILE")
         if [ -z "$PGPASSWORD" ]; then
             PGPASSWORD=$(openssl rand -base64 24 | tr -d "=+/" | cut -c1-20)
-            dialog --msgbox "Сгенерирован пароль PostgreSQL.\nСохранён в $PARAMS_FILE" 8 50
+            dialog --msgbox "Сгенерирован пароль PostgreSQL:\n$PGPASSWORD\n\nСохранён в $PARAMS_FILE" 10 60
         fi
+        break
     done
+    # Экранируем пароль для использования в sed (обязательно)
     PGPASSWORD_ESC=$(printf '%s\n' "$PGPASSWORD" | sed -e 's/[\/&]/\\&/g')
 
     # JWT Secret
-    JWT_SECRET="${JWT_SECRET:-}"
-    while [ -z "$JWT_SECRET" ]; do
+    while true; do
         dialog --clear --title "JWT Secret для Supabase" \
             --inputbox "Введите JWT Secret (оставьте пустым — сгенерируется)\n\n(Для вставки Shift+Insert):" 12 60 \
-            2> "$TEMP_FILE" || exit 1
+            "$JWT_SECRET" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
         JWT_SECRET=$(cat "$TEMP_FILE")
         if [ -z "$JWT_SECRET" ]; then
             JWT_SECRET=$(openssl rand -hex 32)
-            dialog --msgbox "Сгенерирован JWT Secret.\nСохранён в $PARAMS_FILE" 8 60
+            dialog --msgbox "Сгенерирован JWT Secret:\n$JWT_SECRET\n\nСохранён в $PARAMS_FILE" 10 60
         fi
+        break
     done
 
     # LLM провайдер
     LLM_TYPE=$(dialog --clear --title "LLM провайдер" \
-        --radiolist "Выберите LLM:" 15 60 4 \
+        --radiolist "Выберите LLM (стрелки вверх/вниз, пробел — выбрать):" 15 60 4 \
         "ollama" "Ollama (локальный)" on \
         "openai" "OpenAI API" off \
         "anthropic" "Anthropic Claude API" off \
-        3>&1 1>&2 2>&3) || exit 1
+        3>&1 1>&2 2>&3) || { save_state "start"; return 1; }
 
     LLM_API_KEY=""; LLM_API_URL=""
     case "$LLM_TYPE" in
         openai)
-            dialog --passwordbox "Введите API ключ OpenAI (sk-...)\n(Shift+Insert для вставки):" 10 60 2> "$TEMP_FILE" || exit 1
+            dialog --passwordbox "Введите API ключ OpenAI (sk-...)\n(Shift+Insert для вставки):" 10 60 2> "$TEMP_FILE" || { save_state "start"; return 1; }
             LLM_API_KEY=$(cat "$TEMP_FILE")
             LLM_API_URL="https://api.openai.com/v1"
             ;;
         anthropic)
-            dialog --passwordbox "Введите API ключ Anthropic (Shift+Insert):" 10 60 2> "$TEMP_FILE" || exit 1
+            dialog --passwordbox "Введите API ключ Anthropic (Shift+Insert):" 10 60 2> "$TEMP_FILE" || { save_state "start"; return 1; }
             LLM_API_KEY=$(cat "$TEMP_FILE")
             LLM_API_URL="https://api.anthropic.com/v1"
             ;;
         ollama)
-            dialog --inputbox "URL для Ollama (оставьте по умолчанию):" 10 60 "http://ollama:11434" 2> "$TEMP_FILE" || exit 1
+            dialog --inputbox "URL для Ollama (оставьте по умолчанию):" 10 60 "http://ollama:11434" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
             LLM_API_URL=$(cat "$TEMP_FILE")
             ;;
     esac
 
-    dialog --inputbox "Введите ваш домен (example.com):\nОставьте пустым, если используете IP." 10 60 2> "$TEMP_FILE" || exit 1
+    # Домен для NPM
+    dialog --inputbox "Введите ваш домен (example.com):\nОставьте пустым, если используете IP." 10 60 "$DOMAIN" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
     DOMAIN=$(cat "$TEMP_FILE")
 
-    dialog --inputbox "Введите поддомен для Supabase (supabase.example.com):" 10 60 2> "$TEMP_FILE" || exit 1
+    # Домен для Supabase
+    dialog --inputbox "Введите поддомен для Supabase (supabase.example.com):" 10 60 "$SUPABASE_DOMAIN" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
     SUPABASE_DOMAIN=$(cat "$TEMP_FILE")
 
-    N8N_PORT="${N8N_PORT:-5678}"
+    # n8n порт
     if [[ " ${SELECTED_ARRAY[@]} " =~ "n8n" ]]; then
         while true; do
-            dialog --inputbox "Введите порт для веб-интерфейса n8n:" 10 50 "$N8N_PORT" 2> "$TEMP_FILE" || exit 1
+            dialog --inputbox "Введите порт для веб-интерфейса n8n:\n(Shift+Insert для вставки)" 10 50 "$N8N_PORT" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
             N8N_PORT=$(cat "$TEMP_FILE")
             check_port "$N8N_PORT" && break
         done
@@ -180,17 +201,16 @@ input_parameters() {
         fi
     fi
 
-    APACHE_WWW_PATH="${APACHE_WWW_PATH:-$SETUP_DIR/www}"
-    APACHE_HTTP_PORT="${APACHE_HTTP_PORT:-8080}"
+    # Apache путь и порт
     if [[ " ${SELECTED_ARRAY[@]} " =~ "apache" ]]; then
-        dialog --inputbox "Путь для сайтов Apache (оставьте пустым — $SETUP_DIR/www):" 10 60 "$APACHE_WWW_PATH" 2> "$TEMP_FILE" || exit 1
+        dialog --inputbox "Путь для сайтов Apache (оставьте пустым — $SETUP_DIR/www):" 10 60 "$APACHE_WWW_PATH" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
         APACHE_WWW_PATH=$(cat "$TEMP_FILE")
         [ -z "$APACHE_WWW_PATH" ] && APACHE_WWW_PATH="$SETUP_DIR/www"
         APACHE_WWW_PATH=$(realpath -m "$APACHE_WWW_PATH")
         mkdir -p "$APACHE_WWW_PATH" "$APACHE_WWW_PATH/conf"
 
         while true; do
-            dialog --inputbox "Внешний порт для Apache (не должен конфликтовать с NPM):" 10 50 "$APACHE_HTTP_PORT" 2> "$TEMP_FILE" || exit 1
+            dialog --inputbox "Внешний порт для Apache (не должен конфликтовать с NPM):" 10 50 "$APACHE_HTTP_PORT" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
             APACHE_HTTP_PORT=$(cat "$TEMP_FILE")
             check_port "$APACHE_HTTP_PORT" && break
         done
@@ -199,26 +219,29 @@ input_parameters() {
         fi
     fi
 
-    QDRANT_PORT="${QDRANT_PORT:-6333}"
+    # Qdrant порт
     if [[ " ${SELECTED_ARRAY[@]} " =~ "qdrant" ]]; then
         while true; do
-            dialog --inputbox "Внешний порт для Qdrant API:" 10 50 "$QDRANT_PORT" 2> "$TEMP_FILE" || exit 1
+            dialog --inputbox "Внешний порт для Qdrant API:" 10 50 "$QDRANT_PORT" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
             QDRANT_PORT=$(cat "$TEMP_FILE")
             check_port "$QDRANT_PORT" && break
         done
     fi
-    OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+
+    # Ollama порт
     if [[ " ${SELECTED_ARRAY[@]} " =~ "ollama" ]]; then
         while true; do
-            dialog --inputbox "Внешний порт для Ollama API:" 10 50 "$OLLAMA_PORT" 2> "$TEMP_FILE" || exit 1
+            dialog --inputbox "Внешний порт для Ollama API:" 10 50 "$OLLAMA_PORT" 2> "$TEMP_FILE" || { save_state "start"; return 1; }
             OLLAMA_PORT=$(cat "$TEMP_FILE")
             check_port "$OLLAMA_PORT" && break
         done
     fi
 
     save_params
+    return 0
 }
 
+# === 3. Создание сети и .env ===
 setup_network() {
     docker network inspect internal_network &>/dev/null || docker network create internal_network
     mkdir -p "$SETUP_DIR"
@@ -241,13 +264,12 @@ EOF
     chmod 600 .env
 }
 
+# === 4. Установка Supabase (ручная генерация ключей, без внешних скриптов) ===
 setup_supabase() {
-    if [[ ! " ${SELECTED_ARRAY[@]} " =~ "supabase" ]]; then
-        return 0
-    fi
+    [[ ! " ${SELECTED_ARRAY[@]} " =~ "supabase" ]] && return 0
     cd "$SETUP_DIR"
     if [ ! -d "supabase-docker" ]; then
-        dialog --infobox "Скачивание конфигурации Supabase (меньше 1 МБ)..." 5 60
+        dialog --infobox "Скачивание конфигурации Supabase..." 5 60
         git clone --depth 1 --filter=blob:none --sparse https://github.com/supabase/supabase
         cd supabase
         git sparse-checkout set docker
@@ -257,9 +279,32 @@ setup_supabase() {
     fi
     cd supabase-docker
     cp .env.example .env
-    # Исправление: убираем вызов проблемного скрипта и генерируем ключи вручную
-    sed -i "s/^ANON_KEY=.*/ANON_KEY=$(openssl rand -hex 32)/" .env
-    sed -i "s/^SERVICE_ROLE_KEY=.*/SERVICE_ROLE_KEY=$(openssl rand -hex 32)/" .env
+
+    # Генерируем все ключи вручную (без вызова проблемного generate-keys.sh)
+    ANON_KEY=$(openssl rand -hex 32)
+    SERVICE_ROLE_KEY=$(openssl rand -hex 32)
+    SECRET_KEY_BASE=$(openssl rand -hex 32)
+    VAULT_ENC_KEY=$(openssl rand -hex 32)
+    PG_META_CRYPTO_KEY=$(openssl rand -hex 32)
+    LOGFILE_PUBLIC_ACCESS_TOKEN=$(openssl rand -hex 32)
+    LOGFILE_PRIVATE_ACCESS_TOKEN=$(openssl rand -hex 32)
+    S3_PROTOCOL_ACCESS_KEY_ID=$(openssl rand -hex 16)
+    S3_PROTOCOL_ACCESS_KEY_SECRET=$(openssl rand -hex 32)
+    MINIO_ROOT_PASSWORD=$(openssl rand -hex 16)
+    DASHBOARD_PASSWORD=$(openssl rand -hex 12)
+
+    sed -i "s/^ANON_KEY=.*/ANON_KEY=$ANON_KEY/" .env
+    sed -i "s/^SERVICE_ROLE_KEY=.*/SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY/" .env
+    sed -i "s/^SECRET_KEY_BASE=.*/SECRET_KEY_BASE=$SECRET_KEY_BASE/" .env
+    sed -i "s/^VAULT_ENC_KEY=.*/VAULT_ENC_KEY=$VAULT_ENC_KEY/" .env
+    sed -i "s/^PG_META_CRYPTO_KEY=.*/PG_META_CRYPTO_KEY=$PG_META_CRYPTO_KEY/" .env
+    sed -i "s/^LOGFILE_PUBLIC_ACCESS_TOKEN=.*/LOGFILE_PUBLIC_ACCESS_TOKEN=$LOGFILE_PUBLIC_ACCESS_TOKEN/" .env
+    sed -i "s/^LOGFILE_PRIVATE_ACCESS_TOKEN=.*/LOGFILE_PRIVATE_ACCESS_TOKEN=$LOGFILE_PRIVATE_ACCESS_TOKEN/" .env
+    sed -i "s/^S3_PROTOCOL_ACCESS_KEY_ID=.*/S3_PROTOCOL_ACCESS_KEY_ID=$S3_PROTOCOL_ACCESS_KEY_ID/" .env
+    sed -i "s/^S3_PROTOCOL_ACCESS_KEY_SECRET=.*/S3_PROTOCOL_ACCESS_KEY_SECRET=$S3_PROTOCOL_ACCESS_KEY_SECRET/" .env
+    sed -i "s/^MINIO_ROOT_PASSWORD=.*/MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD/" .env
+    sed -i "s/^DASHBOARD_PASSWORD=.*/DASHBOARD_PASSWORD=$DASHBOARD_PASSWORD/" .env
+
     sed -i "s/POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${PGPASSWORD_ESC}/" .env
     sed -i "s/JWT_SECRET=.*/JWT_SECRET=${JWT_SECRET}/" .env
     if [ -n "$SUPABASE_DOMAIN" ]; then
@@ -267,6 +312,7 @@ setup_supabase() {
         sed -i "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=https://${SUPABASE_DOMAIN}|" .env
         sed -i "s|^SITE_URL=.*|SITE_URL=https://${SUPABASE_DOMAIN}|" .env
     fi
+
     if ! grep -q "internal_network" docker-compose.yml; then
         cat >> docker-compose.yml <<EOF
 
@@ -275,15 +321,16 @@ networks:
     external: true
 EOF
     fi
+
     docker compose -p supabase up -d
     sleep 5
     for container in $(docker ps --filter "name=supabase" --format "{{.Names}}"); do
         docker network connect internal_network "$container" 2>/dev/null || true
     done
     cd ..
-    return 0
 }
 
+# === 5. Генерация docker-compose.yml ===
 generate_compose_file() {
     cd "$SETUP_DIR"
     cat > docker-compose.yml <<EOF
@@ -432,6 +479,7 @@ EOF
     fi
 }
 
+# === 6. Запуск контейнеров ===
 start_containers() {
     cd "$SETUP_DIR"
     dialog --infobox "Запуск контейнеров..." 5 40
@@ -448,23 +496,22 @@ start_containers() {
     fi
 }
 
+# === 7. SSL инструкция для NPM ===
 configure_nginx_ssl() {
-    if [[ ! " ${SELECTED_ARRAY[@]} " =~ "nginx_proxy" ]] || [ -z "$DOMAIN" ]; then
-        return 0
-    fi
+    [[ ! " ${SELECTED_ARRAY[@]} " =~ "nginx_proxy" ]] || [ -z "$DOMAIN" ] && return 0
     sleep 10
     cat > "$SETUP_DIR/auto_ssl_commands.sh" <<EOF
 #!/bin/bash
-# Автоматическая настройка SSL для домена $DOMAIN через API NPM
+# Настройка SSL для домена $DOMAIN через NPM
 # Откройте http://$(hostname -I | awk '{print $1}'):81, логин admin@example.com пароль changeme
 # Добавьте прокси для $DOMAIN на http://nginx-proxy-manager:81
 # Затем запросите SSL-сертификат Let's Encrypt.
 EOF
     chmod +x "$SETUP_DIR/auto_ssl_commands.sh"
     dialog --msgbox "Инструкция по SSL сохранена в $SETUP_DIR/auto_ssl_commands.sh\n\nНастройте прокси вручную: http://$(hostname -I | awk '{print $1}'):81" 12 60
-    return 0
 }
 
+# === 8. Переустановка сервиса ===
 reinstall_service() {
     local svc=$1
     dialog --infobox "Переустановка $svc..." 5 50
@@ -487,6 +534,7 @@ reinstall_service() {
     dialog --msgbox "Сервис $svc переустановлен." 6 40
 }
 
+# === 9. Финальное окно с возможностью копирования ===
 show_summary() {
     SERVER_IPS=$(hostname -I | tr ' ' '\n' | grep -v '^$')
     FIRST_IP=$(echo "$SERVER_IPS" | head -1)
@@ -500,7 +548,7 @@ show_summary() {
     fi
     if [[ " ${SELECTED_ARRAY[@]} " =~ "nginx_proxy" ]]; then
         SUMMARY+="🔹 Nginx Proxy Manager: http://$FIRST_IP:81\n"
-        SUMMARY+="   Логин: admin@example.com | Пароль: changeme\n\n"
+        SUMMARY+="   Логин: admin@example.com | Пароль: changeme\n"
     fi
     if [[ " ${SELECTED_ARRAY[@]} " =~ "apache" ]]; then
         SUMMARY+="🔹 Apache: http://$FIRST_IP:${APACHE_HTTP_PORT}\n"
@@ -522,16 +570,14 @@ show_summary() {
         [ -n "$DOMAIN" ] && SUMMARY+="   Через домен: http://n8n.$DOMAIN\n"
     fi
 
-    SUMMARY+="\n📌 Пароль PostgreSQL сохранён в $PARAMS_FILE\n"
-    SUMMARY+="📌 Все остальные секреты — там же.\n"
-    SUMMARY+="\nВсе данные: $SETUP_DIR\n"
-    SUMMARY+="Состояние: $STATE_DIR"
+    SUMMARY+="\n📌 Все пароли и секреты сохранены в:\n   $PARAMS_FILE\n   $SETUP_DIR/supabase-docker/.env (если Supabase установлен)\n"
+    SUMMARY+="\nВсе данные: $SETUP_DIR\nСостояние: $STATE_DIR"
 
-    # Показываем окно с возможностью копирования мышкой
     echo -e "$SUMMARY" > "$STATE_DIR/final_summary.txt"
     dialog --title "Готово! (можно копировать мышкой)" --textbox "$STATE_DIR/final_summary.txt" 20 70
 }
 
+# === 10. Главная функция ===
 main() {
     if ! grep -qi "ubuntu\|debian" /etc/os-release; then
         echo -e "${RED}Скрипт только для Ubuntu/Debian.${NC}"; exit 1
@@ -555,9 +601,17 @@ main() {
     case "$current_state" in
         "start")
             show_service_menu
-            input_parameters
+            input_parameters || { save_state "start"; main; return; }
             install_docker
             save_state "docker_installed"
+            # Продолжаем без перезагрузки
+            setup_network
+            setup_supabase
+            generate_compose_file
+            start_containers
+            configure_nginx_ssl
+            show_summary
+            save_state "completed"
             ;;
         "docker_installed")
             setup_network
