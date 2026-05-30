@@ -7,8 +7,8 @@ set -euo pipefail
 
 # Цвета для сообщений (только для вывода вне dialog)
 GREEN='\033[0;32m'
-YELLOW='\1[33m'
-RED='\0[31m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
 NC='\033[0m'
 
 # === Глобальные переменные ===
@@ -30,7 +30,9 @@ save_state() { echo "$1" > "$STATE_FILE"; }
 get_state() { [[ -f "$STATE_FILE" ]] && cat "$STATE_FILE" || echo "start"; }
 save_selected_services() { printf "%s\n" "${SELECTED_ARRAY[@]}" > "$SELECTED_FILE"; }
 load_selected_services() { SELECTED_ARRAY=(); [[ -f "$SELECTED_FILE" ]] && mapfile -t SELECTED_ARRAY < "$SELECTED_FILE"; }
-save_params() { mkdir -p "$STATE_DIR"; cat > "$PARAMS_FILE" <<EOF; chmod 600 "$PARAMS_FILE"; }
+save_params() {
+    mkdir -p "$STATE_DIR"
+    cat > "$PARAMS_FILE" <<EOF
 PGPASSWORD="$PGPASSWORD"
 JWT_SECRET="$JWT_SECRET"
 LLM_TYPE="$LLM_TYPE"
@@ -45,8 +47,11 @@ APACHE_HTTP_PORT="$APACHE_HTTP_PORT"
 QDRANT_PORT="$QDRANT_PORT"
 OLLAMA_PORT="$OLLAMA_PORT"
 EOF
+    chmod 600 "$PARAMS_FILE"
+}
 load_params() { [[ -f "$PARAMS_FILE" ]] && source "$PARAMS_FILE"; }
 
+# Функция проверки порта должна быть определена до её использования
 check_port() {
     local port=$1
     if ss -tuln | grep -q ":$port "; then
@@ -250,13 +255,11 @@ EOF
 # === 4. Установка Supabase (полная, корректная) ===
 setup_supabase() {
     if [[ ! " ${SELECTED_ARRAY[@]} " =~ "supabase" ]]; then
-        # Если supabase не выбран, но ранее был установлен – останавливаем и удаляем?
         return
     fi
     cd "$SETUP_DIR"
     if [ ! -d "supabase-docker" ]; then
         dialog --infobox "Скачивание конфигурации Supabase (меньше 1 МБ)..." 5 60
-        # Берём только docker-файлы из официального репозитория
         git clone --depth 1 --filter=blob:none --sparse https://github.com/supabase/supabase
         cd supabase
         git sparse-checkout set docker
@@ -475,27 +478,17 @@ start_containers() {
     fi
 }
 
-# === 7. Автоматическая настройка SSL через NPM (API) ===
+# === 7. Автоматическая настройка SSL через NPM (инструкция) ===
 configure_nginx_ssl() {
     if [[ ! " ${SELECTED_ARRAY[@]} " =~ "nginx_proxy" ]] || [ -z "$DOMAIN" ]; then
         return
     fi
-    # Ждём, пока NPM поднимется
     sleep 10
-    # Получаем внутренний IP контейнера NPM
-    NPM_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' nginx-proxy-manager)
-    # Используем npm_api.py или прямой запрос (упрощённо: создаём через curl)
-    # Для простоты сгенерируем инструкцию и попробуем автоматически через email
-    dialog --infobox "Настройка SSL через Nginx Proxy Manager..." 5 60
-    # Создаём прокси для домена (если указан)
-    # Требуется предварительно получить токен. Для автоматизации лучше использовать npm-cli.
-    # Здесь используем готовый скрипт npm_api.sh (не входит в дистрибутив, но можно добавить)
-    # Вместо этого сохраняем готовую команду в файл для ручного выполнения.
     cat > "$SETUP_DIR/auto_ssl_commands.sh" <<EOF
 #!/bin/bash
 # Автоматическая настройка SSL для домена $DOMAIN через API NPM
 # Требуется npm_api.py из https://github.com/Digital-ECO/nginx-proxy-manager-api
-# Упрощённо: откройте http://$SERVER_IP:81, логин admin@example.com пароль changeme
+# Упрощённо: откройте http://$(hostname -I | awk '{print $1}'):81, логин admin@example.com пароль changeme
 # Добавьте прокси для $DOMAIN на http://nginx-proxy-manager:81
 # Затем запросите SSL-сертификат Let's Encrypt.
 EOF
