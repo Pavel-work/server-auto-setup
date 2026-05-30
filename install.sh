@@ -12,11 +12,11 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 # === Глобальные переменные ===
-STATE_DIR="/root/.server-setup-state"   # при sudo $HOME=/root
+STATE_DIR="/root/.server-setup-state"
 STATE_FILE="$STATE_DIR/state.cfg"
 SELECTED_FILE="$STATE_DIR/selected_services.cfg"
 PARAMS_FILE="$STATE_DIR/params.env"
-SETUP_DIR="/root/server-setup"          # рабочий каталог
+SETUP_DIR="/root/server-setup"
 TEMP_FILE=$(mktemp)
 REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6 || echo "$HOME")
@@ -25,11 +25,27 @@ REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6 || echo "$HOME")
 cleanup() { rm -f "$TEMP_FILE"; }
 trap cleanup EXIT INT TERM
 
-# === Вспомогательные функции ===
-save_state() { echo "$1" > "$STATE_FILE"; }
-get_state() { [[ -f "$STATE_FILE" ]] && cat "$STATE_FILE" || echo "start"; }
-save_selected_services() { printf "%s\n" "${SELECTED_ARRAY[@]}" > "$SELECTED_FILE"; }
-load_selected_services() { SELECTED_ARRAY=(); [[ -f "$SELECTED_FILE" ]] && mapfile -t SELECTED_ARRAY < "$SELECTED_FILE"; }
+# === Вспомогательные функции с явным возвратом 0 ===
+save_state() { echo "$1" > "$STATE_FILE"; return 0; }
+get_state() {
+    if [[ -f "$STATE_FILE" ]]; then
+        cat "$STATE_FILE"
+    else
+        echo "start"
+    fi
+    return 0
+}
+save_selected_services() {
+    printf "%s\n" "${SELECTED_ARRAY[@]}" > "$SELECTED_FILE"
+    return 0
+}
+load_selected_services() {
+    SELECTED_ARRAY=()
+    if [[ -f "$SELECTED_FILE" ]]; then
+        mapfile -t SELECTED_ARRAY < "$SELECTED_FILE"
+    fi
+    return 0
+}
 save_params() {
     mkdir -p "$STATE_DIR"
     cat > "$PARAMS_FILE" <<EOF
@@ -48,10 +64,16 @@ QDRANT_PORT="$QDRANT_PORT"
 OLLAMA_PORT="$OLLAMA_PORT"
 EOF
     chmod 600 "$PARAMS_FILE"
+    return 0
 }
-load_params() { [[ -f "$PARAMS_FILE" ]] && source "$PARAMS_FILE"; }
+load_params() {
+    if [[ -f "$PARAMS_FILE" ]]; then
+        source "$PARAMS_FILE"
+    fi
+    return 0
+}
 
-# Функция проверки порта должна быть определена до её использования
+# Функция проверки порта (определена до использования)
 check_port() {
     local port=$1
     if ss -tuln | grep -q ":$port "; then
@@ -70,13 +92,13 @@ install_docker() {
         dialog --msgbox "Docker установлен.\nПерезайдите в систему (или перезагрузите сервер) и запустите скрипт снова.\n\nПосле перезагрузки запустите: sudo $0" 10 60
         exit 0
     fi
-    if ! docker compose version &>/dev/null; then
+    if ! docker compose version &> /dev/null; then
         apt-get install -y docker-compose-plugin
     fi
     systemctl enable docker --now
 }
 
-# === 1. Меню выбора сервисов (с возможностью переустановки) ===
+# === 1. Меню выбора сервисов ===
 show_service_menu() {
     local args=(
         "postgres" "PostgreSQL (база данных)" "off"
@@ -88,7 +110,6 @@ show_service_menu() {
         "supabase" "Supabase (полный self-hosted)" "off"
         "n8n" "n8n (автоматизация)" "off"
     )
-    # Загружаем предыдущий выбор
     if [ ${#SELECTED_ARRAY[@]} -gt 0 ]; then
         for ((i=0; i<${#args[@]}; i+=3)); do
             for sel in "${SELECTED_ARRAY[@]}"; do
@@ -98,7 +119,7 @@ show_service_menu() {
     fi
 
     dialog --clear --title "Выбор сервисов для установки" \
-        --checklist "Отметьте нужные компоненты (пробел — выбрать/снять).\nДля переустановки отдельного сервиса снимите и поставьте его заново." 22 70 10 \
+        --checklist "Отметьте нужные компоненты (пробел — выбрать/снять)." 22 70 10 \
         "${args[@]}" 2> "$TEMP_FILE"
     [ $? -ne 0 ] && { echo "Установка отменена."; exit 1; }
 
@@ -110,9 +131,9 @@ show_service_menu() {
     save_selected_services
 }
 
-# === 2. Ввод параметров (с портами, экранированием) ===
+# === 2. Ввод параметров ===
 input_parameters() {
-    # Пароль PostgreSQL
+    # PostgreSQL пароль
     PGPASSWORD="${PGPASSWORD:-}"
     while [ -z "$PGPASSWORD" ]; do
         dialog --clear --title "PostgreSQL" \
@@ -124,7 +145,6 @@ input_parameters() {
             dialog --msgbox "Сгенерирован пароль PostgreSQL.\nСохранён в $PARAMS_FILE" 8 50
         fi
     done
-    # Экранирование для .env и sed (замена & и /)
     PGPASSWORD_ESC=$(printf '%s\n' "$PGPASSWORD" | sed -e 's/[\/&]/\\&/g')
 
     # JWT Secret
@@ -174,7 +194,7 @@ input_parameters() {
     dialog --inputbox "Введите поддомен для Supabase (supabase.example.com):" 10 60 2> "$TEMP_FILE" || exit 1
     SUPABASE_DOMAIN=$(cat "$TEMP_FILE")
 
-    # Порт n8n
+    # n8n порт
     N8N_PORT="${N8N_PORT:-5678}"
     if [[ " ${SELECTED_ARRAY[@]} " =~ "n8n" ]]; then
         while true; do
@@ -207,7 +227,7 @@ input_parameters() {
         fi
     fi
 
-    # Внешние порты для Qdrant и Ollama
+    # Qdrant и Ollama порты
     QDRANT_PORT="${QDRANT_PORT:-6333}"
     if [[ " ${SELECTED_ARRAY[@]} " =~ "qdrant" ]]; then
         while true; do
@@ -228,12 +248,11 @@ input_parameters() {
     save_params
 }
 
-# === 3. Создание сети и структуры каталогов ===
+# === 3. Создание сети и .env ===
 setup_network() {
     docker network inspect internal_network &>/dev/null || docker network create internal_network
     mkdir -p "$SETUP_DIR"
     cd "$SETUP_DIR"
-    # Сохраняем .env
     cat > .env <<EOF
 POSTGRES_PASSWORD=${PGPASSWORD}
 JWT_SECRET=${JWT_SECRET}
@@ -252,10 +271,10 @@ EOF
     chmod 600 .env
 }
 
-# === 4. Установка Supabase (полная, корректная) ===
+# === 4. Установка Supabase (только docker-файлы) ===
 setup_supabase() {
     if [[ ! " ${SELECTED_ARRAY[@]} " =~ "supabase" ]]; then
-        return
+        return 0
     fi
     cd "$SETUP_DIR"
     if [ ! -d "supabase-docker" ]; then
@@ -269,12 +288,10 @@ setup_supabase() {
     fi
     cd supabase-docker
     cp .env.example .env
-    # Генерируем ключи
     chmod +x ./utils/generate-keys.sh 2>/dev/null || true
     if [ -f ./utils/generate-keys.sh ]; then
         ./utils/generate-keys.sh
     else
-        # fallback: ручная генерация
         sed -i "s/^ANON_KEY=.*/ANON_KEY=$(openssl rand -hex 32)/" .env
         sed -i "s/^SERVICE_ROLE_KEY=.*/SERVICE_ROLE_KEY=$(openssl rand -hex 32)/" .env
     fi
@@ -285,7 +302,6 @@ setup_supabase() {
         sed -i "s|^API_EXTERNAL_URL=.*|API_EXTERNAL_URL=https://${SUPABASE_DOMAIN}|" .env
         sed -i "s|^SITE_URL=.*|SITE_URL=https://${SUPABASE_DOMAIN}|" .env
     fi
-    # Добавляем внешнюю сеть в docker-compose.yml
     if ! grep -q "internal_network" docker-compose.yml; then
         cat >> docker-compose.yml <<EOF
 
@@ -294,17 +310,16 @@ networks:
     external: true
 EOF
     fi
-    # Запуск через docker compose с указанием проекта
     docker compose -p supabase up -d
-    # Подключаем контейнеры к общей сети (имена могут иметь суффикс -1)
     sleep 5
     for container in $(docker ps --filter "name=supabase" --format "{{.Names}}"); do
         docker network connect internal_network "$container" 2>/dev/null || true
     done
     cd ..
+    return 0
 }
 
-# === 5. Генерация docker-compose.yml (общего) ===
+# === 5. Генерация docker-compose.yml ===
 generate_compose_file() {
     cd "$SETUP_DIR"
     cat > docker-compose.yml <<EOF
@@ -323,7 +338,6 @@ EOF
 
     echo -e "\nservices:" >> docker-compose.yml
 
-    # PostgreSQL
     if [[ " ${SELECTED_ARRAY[@]} " =~ "postgres" ]]; then
         cat >> docker-compose.yml <<EOF
   postgres:
@@ -341,7 +355,6 @@ EOF
 EOF
     fi
 
-    # Qdrant с внешним портом
     if [[ " ${SELECTED_ARRAY[@]} " =~ "qdrant" ]]; then
         cat >> docker-compose.yml <<EOF
   qdrant:
@@ -357,7 +370,6 @@ EOF
 EOF
     fi
 
-    # Ollama с внешним портом
     if [[ " ${SELECTED_ARRAY[@]} " =~ "ollama" ]]; then
         cat >> docker-compose.yml <<EOF
   ollama:
@@ -375,7 +387,6 @@ EOF
 EOF
     fi
 
-    # Apache с внешним портом (если не используется NPM, иначе порт может быть 8080)
     if [[ " ${SELECTED_ARRAY[@]} " =~ "apache" ]]; then
         cat >> docker-compose.yml <<EOF
   apache:
@@ -392,7 +403,6 @@ EOF
 EOF
     fi
 
-    # Nginx Proxy Manager
     if [[ " ${SELECTED_ARRAY[@]} " =~ "nginx_proxy" ]]; then
         cat >> docker-compose.yml <<EOF
   nginx-proxy-manager:
@@ -411,7 +421,6 @@ EOF
 EOF
     fi
 
-    # Portainer
     if [[ " ${SELECTED_ARRAY[@]} " =~ "portainer" ]]; then
         cat >> docker-compose.yml <<EOF
   portainer:
@@ -429,7 +438,6 @@ EOF
 EOF
     fi
 
-    # n8n
     if [[ " ${SELECTED_ARRAY[@]} " =~ "n8n" ]]; then
         local n8n_db_env=""
         if [ "${N8N_DB_POSTGRES:-0}" -eq 1 ]; then
@@ -460,13 +468,12 @@ EOF
     fi
 }
 
-# === 6. Запуск контейнеров (и создание БД n8n) ===
+# === 6. Запуск контейнеров ===
 start_containers() {
     cd "$SETUP_DIR"
     dialog --infobox "Запуск контейнеров..." 5 40
     docker compose up -d
     if [[ " ${SELECTED_ARRAY[@]} " =~ "n8n" ]] && [ "${N8N_DB_POSTGRES:-0}" -eq 1 ]; then
-        # Ожидание готовности PostgreSQL
         dialog --infobox "Ожидание PostgreSQL перед созданием базы n8n..." 5 50
         for i in {1..30}; do
             if docker exec postgres pg_isready -U admin &>/dev/null; then
@@ -478,25 +485,25 @@ start_containers() {
     fi
 }
 
-# === 7. Автоматическая настройка SSL через NPM (инструкция) ===
+# === 7. SSL инструкция для NPM ===
 configure_nginx_ssl() {
     if [[ ! " ${SELECTED_ARRAY[@]} " =~ "nginx_proxy" ]] || [ -z "$DOMAIN" ]; then
-        return
+        return 0
     fi
     sleep 10
     cat > "$SETUP_DIR/auto_ssl_commands.sh" <<EOF
 #!/bin/bash
 # Автоматическая настройка SSL для домена $DOMAIN через API NPM
-# Требуется npm_api.py из https://github.com/Digital-ECO/nginx-proxy-manager-api
-# Упрощённо: откройте http://$(hostname -I | awk '{print $1}'):81, логин admin@example.com пароль changeme
+# Откройте http://$(hostname -I | awk '{print $1}'):81, логин admin@example.com пароль changeme
 # Добавьте прокси для $DOMAIN на http://nginx-proxy-manager:81
 # Затем запросите SSL-сертификат Let's Encrypt.
 EOF
     chmod +x "$SETUP_DIR/auto_ssl_commands.sh"
-    dialog --msgbox "Автоматическая SSL настройка требует API-ключ.\nИнструкция сохранена в $SETUP_DIR/auto_ssl_commands.sh\n\nВыполните ручную настройку: http://$(hostname -I | awk '{print $1}'):81" 12 60
+    dialog --msgbox "Инструкция по SSL сохранена в $SETUP_DIR/auto_ssl_commands.sh\n\nНастройте прокси вручную: http://$(hostname -I | awk '{print $1}'):81" 12 60
+    return 0
 }
 
-# === 8. Функция переустановки одного сервиса ===
+# === 8. Переустановка отдельного сервиса ===
 reinstall_service() {
     local svc=$1
     dialog --infobox "Переустановка $svc..." 5 50
@@ -510,7 +517,7 @@ reinstall_service() {
         postgres|qdrant|ollama|apache|nginx_proxy|portainer|n8n)
             docker compose stop $svc
             docker compose rm -f $svc
-            docker volume prune -f  # осторожно: удаляет неиспользуемые тома
+            docker volume prune -f
             generate_compose_file
             docker compose up -d $svc
             ;;
@@ -519,7 +526,7 @@ reinstall_service() {
     dialog --msgbox "Сервис $svc переустановлен." 6 40
 }
 
-# === 9. Финальное окно с результатами ===
+# === 9. Финальное окно ===
 show_summary() {
     SERVER_IPS=$(hostname -I | tr ' ' '\n' | grep -v '^$')
     FIRST_IP=$(echo "$SERVER_IPS" | head -1)
@@ -562,16 +569,14 @@ show_summary() {
     dialog --title "Готово!" --msgbox "$SUMMARY" 20 70
 }
 
-# === 10. Главная функция с поддержкой переустановки ===
+# === 10. Главная функция ===
 main() {
-    # Проверка ОС и прав
     if ! grep -qi "ubuntu\|debian" /etc/os-release; then
         echo -e "${RED}Скрипт только для Ubuntu/Debian.${NC}"; exit 1
     fi
     if [ "$EUID" -ne 0 ]; then
         echo -e "${YELLOW}Запустите с sudo: sudo $0${NC}"; exit 1
     fi
-    # Установка dialog, если нет
     if ! command -v dialog &> /dev/null; then
         apt-get update && apt-get install -y dialog
     fi
@@ -580,7 +585,6 @@ main() {
     load_selected_services
     load_params
 
-    # Флаг переустановки отдельных сервисов (можно добавить опцию командной строки)
     if [ $# -gt 0 ] && [ "$1" == "--reinstall" ] && [ -n "$2" ]; then
         reinstall_service "$2"
         exit 0
@@ -591,7 +595,6 @@ main() {
             show_service_menu
             input_parameters
             install_docker
-            # после установки docker скрипт выходит, следующий запуск продолжит
             save_state "docker_installed"
             ;;
         "docker_installed")
@@ -616,7 +619,6 @@ main() {
                     show_summary
                     ;;
                 2)
-                    # Список установленных сервисов
                     INSTALLED=()
                     for svc in postgres qdrant ollama apache nginx_proxy portainer supabase n8n; do
                         if docker ps --format '{{.Names}}' | grep -q "^$svc$"; then
