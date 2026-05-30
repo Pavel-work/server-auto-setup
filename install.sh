@@ -1,7 +1,7 @@
 #!/bin/bash
 # Универсальный установщик сервисов (исправленная версия)
-# Поддержка: PostgreSQL, Qdrant, Ollama, Apache, Nginx Proxy Manager (с авто-SSL),
-# Portainer, Supabase (полный), n8n, переустановка отдельных сервисов.
+# Поддержка: PostgreSQL, Qdrant, Ollama, Apache, Nginx Proxy Manager, Portainer, Supabase, n8n
+# Работает с set -e, корректно обрабатывает отсутствие файлов состояния.
 
 set -euo pipefail
 
@@ -26,7 +26,11 @@ cleanup() { rm -f "$TEMP_FILE"; }
 trap cleanup EXIT INT TERM
 
 # === Вспомогательные функции с явным возвратом 0 ===
-save_state() { echo "$1" > "$STATE_FILE"; return 0; }
+save_state() { 
+    echo "$1" > "$STATE_FILE"
+    return 0
+}
+
 get_state() {
     if [[ -f "$STATE_FILE" ]]; then
         cat "$STATE_FILE"
@@ -35,10 +39,12 @@ get_state() {
     fi
     return 0
 }
+
 save_selected_services() {
     printf "%s\n" "${SELECTED_ARRAY[@]}" > "$SELECTED_FILE"
     return 0
 }
+
 load_selected_services() {
     SELECTED_ARRAY=()
     if [[ -f "$SELECTED_FILE" ]]; then
@@ -46,6 +52,7 @@ load_selected_services() {
     fi
     return 0
 }
+
 save_params() {
     mkdir -p "$STATE_DIR"
     cat > "$PARAMS_FILE" <<EOF
@@ -66,8 +73,10 @@ EOF
     chmod 600 "$PARAMS_FILE"
     return 0
 }
+
 load_params() {
     if [[ -f "$PARAMS_FILE" ]]; then
+        # shellcheck source=/dev/null
         source "$PARAMS_FILE"
     fi
     return 0
@@ -110,6 +119,7 @@ show_service_menu() {
         "supabase" "Supabase (полный self-hosted)" "off"
         "n8n" "n8n (автоматизация)" "off"
     )
+    # Включить ранее выбранные
     if [ ${#SELECTED_ARRAY[@]} -gt 0 ]; then
         for ((i=0; i<${#args[@]}; i+=3)); do
             for sel in "${SELECTED_ARRAY[@]}"; do
@@ -515,8 +525,8 @@ reinstall_service() {
             setup_supabase
             ;;
         postgres|qdrant|ollama|apache|nginx_proxy|portainer|n8n)
-            docker compose stop $svc
-            docker compose rm -f $svc
+            docker compose stop $svc || true
+            docker compose rm -f $svc || true
             docker volume prune -f
             generate_compose_file
             docker compose up -d $svc
