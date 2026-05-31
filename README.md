@@ -53,11 +53,11 @@ sudo bash install.sh
 3. **Установка:** Автоматическая установка Docker (если не установлен), генерация `.env` и `docker-compose.yml`.
 4. **Запуск:** Поэтапный старт контейнеров (сначала БД, затем зависимые сервисы).
 5. **Финал:** Вывод сводки с IP-адресами, портами и сгенерированными паролями.
-<img width="747" height="662" alt="viborservisov" src="https://github.com/user-attachments/assets/eab83911-cb60-4625-a604-d0ec1ed3c593" />
+   <img width="747" height="662" alt="viborservisov" src="https://github.com/user-attachments/assets/eab83911-cb60-4625-a604-d0ec1ed3c593" />
 
 <p align="center">
   <!-- МЕСТО ДЛЯ СКРИНШОТА ИНТЕРФЕЙСА -->
-  <img src="assets/tui-screenshot.png" alt="TUI Screenshot" width="600" />
+  <img src="[assets/tui-screenshot.png](https://github.com/user-attachments/assets/eab83911-cb60-4625-a604-d0ec1ed3c593)" alt="TUI Screenshot" width="600" />
   <br>
   <em>Пример TUI-интерфейса выбора сервисов</em>
 </p>
