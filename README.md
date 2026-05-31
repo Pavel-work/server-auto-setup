@@ -1,8 +1,6 @@
-# Server Auto Setup
+# 🎩 Джентльменский набор (Server Setup Toolkit)
 
 Одна команда для полной установки Docker, PostgreSQL, Qdrant, Ollama, Apache, Nginx Proxy Manager, Portainer, Supabase и n8n на сервере с Ubuntu.
-
-# 🎩 Джентльменский набор (Server Setup Toolkit)
 
 **Джентльменский набор** — это мощный интерактивный bash-скрипт для быстрого развертывания популярного серверного стека на базе Docker. Скрипт берет на себя всю рутину: от установки Docker и настройки сетей до генерации `docker-compose.yml` и инициализации баз данных.
 
