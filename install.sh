@@ -944,10 +944,35 @@ YEOF
 ###############################################################################
 start_containers() {
     cd "$SETUP_DIR"
-    dialog --gauge "Запуск контейнеров..." 8 60 30 &
+    dialog --gauge "Запуск контейнеров..." 8 60 10 &
     local gp=$!
-    docker compose up -d >/dev/null 2>&1
+    local compose_err="$TMP2"
+
+    # Запускаем и сохраняем вывод — без заглушек!
+    if ! docker compose up -d >"$compose_err" 2>&1; then
+        kill "$gp" 2>/dev/null || true
+        log "ERROR: docker compose up failed"
+        cat "$compose_err" >> "$LOG_FILE" 2>/dev/null || true
+        dialog --title "Ошибка при запуске" --textbox "$compose_err" 20 80
+        exit 1
+    fi
     kill "$gp" 2>/dev/null || true
+
+    # Проверяем что контейнеры действительно запустились
+    dialog --gauge "Проверка контейнеров..." 8 60 80 &
+    gp=$!
+    sleep 3
+    kill "$gp" 2>/dev/null || true
+
+    local running_count
+    running_count=$(docker ps --filter "label=com.docker.compose.project" --format '{{.Names}}' 2>/dev/null | wc -l)
+    if [[ "$running_count" -eq 0 ]]; then
+        log "ERROR: No containers started"
+        cat "$compose_err" >> "$LOG_FILE" 2>/dev/null || true
+        dialog --title "Ошибка" --msgbox "Контейнеры не запустились. Лог: $compose_err" 8 60
+        exit 1
+    fi
+    log "Containers started: $running_count running"
 
     # n8n database
     if is_selected "n8n" && [[ "${N8N_DB_POSTGRES:-0}" -eq 1 ]] && is_selected "postgres"; then
@@ -957,7 +982,7 @@ start_containers() {
                 psql -U admin -c "CREATE DATABASE n8n;" >/dev/null 2>&1 || true
         fi
     fi
-    log "Containers started"
+    log "Containers started successfully"
 }
 
 ###############################################################################
