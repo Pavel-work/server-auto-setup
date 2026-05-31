@@ -2,27 +2,7 @@
 
 Одна команда для полной установки Docker, PostgreSQL, Qdrant, Ollama, Apache, Nginx Proxy Manager, Portainer, Supabase и n8n на сервере с Ubuntu.
 
-## Быстрый запуск
-
-Скопируйте и выполните в терминале вашего сервера (Ubuntu) одну строку:
-
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/Pavel-work/server-auto-setup/main/install.sh" | sudo bash -s
-```
 # 🎩 Джентльменский набор (Server Setup Toolkit)
-
-<p align="center">
-  <!-- МЕСТО ДЛЯ ОБЛОЖКИ / БАННЕРА -->
-  <img src="assets/banner.png" alt="Server Setup Toolkit Banner" width="100%" />
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Bash-Script-green?logo=gnubash" alt="Bash">
-  <img src="https://img.shields.io/badge/Docker-Compose-blue?logo=docker" alt="Docker">
-  <img src="https://img.shields.io/badge/Ubuntu%20%7C%20Debian-Supported-orange?logo=ubuntu" alt="OS">
-  <img src="https://img.shields.io/badge/Version-4.11-purple" alt="Version">
-</p>
 
 **Джентльменский набор** — это мощный интерактивный bash-скрипт для быстрого развертывания популярного серверного стека на базе Docker. Скрипт берет на себя всю рутину: от установки Docker и настройки сетей до генерации `docker-compose.yml` и инициализации баз данных.
 
@@ -98,6 +78,17 @@ sudo bash install.sh
 Скрипт предназначен для быстрого развертывания dev/test окружения, домашних серверов (HomeLab) или небольших production-серверов. 
 **Всегда делайте бэкапы** перед использованием функций переустановки или полного сброса!
 
+<p align="center">
+  <!-- МЕСТО ДЛЯ ОБЛОЖКИ / БАННЕРА -->
+  <img src="assets/banner.png" alt="Server Setup Toolkit Banner" width="100%" />
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Bash-Script-green?logo=gnubash" alt="Bash">
+  <img src="https://img.shields.io/badge/Docker-Compose-blue?logo=docker" alt="Docker">
+  <img src="https://img.shields.io/badge/Ubuntu%20%7C%20Debian-Supported-orange?logo=ubuntu" alt="OS">
+  <img src="https://img.shields.io/badge/Version-4.11-purple" alt="Version">
+</p>
 ---
 
 <p align="center">
