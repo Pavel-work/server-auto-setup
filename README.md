@@ -37,7 +37,6 @@
 
 ## 🚀 Быстрый старт
 Скопируйте и выполните в терминале вашего сервера (Ubuntu) одну строку:
-# Или одной строкой (замените ссылку на raw-ссылку вашего репозитория):
 ```bash
 curl -fsSL "https://raw.githubusercontent.com/Pavel-work/server-auto-setup/main/install.sh" | sudo bash -s
 ```
