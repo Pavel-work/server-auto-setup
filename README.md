@@ -58,15 +58,15 @@ curl -fsSL "https://raw.githubusercontent.com/Pavel-work/server-auto-setup/main/
 - **Пакеты:** `dialog` (установится автоматически при первом запуске)
 
 ## 🚀 Быстрый старт
-
-Скачайте и запустите скрипт одной командой:
-
-```bash
-# Если скрипт загружен на сервер:
-sudo bash install.sh
-
+Скопируйте и выполните в терминале вашего сервера (Ubuntu) одну строку:
 # Или одной строкой (замените ссылку на raw-ссылку вашего репозитория):
-curl -sSL https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/install.sh | sudo bash
+```bash
+curl -fsSL "https://raw.githubusercontent.com/Pavel-work/server-auto-setup/main/install.sh" | sudo bash -s
+```
+# Если скрипт загружен на сервер:
+Запустите скрипт одной командой:
+```bash
+sudo bash install.sh
 ```
 
 ## 🖥️ Как это работает
