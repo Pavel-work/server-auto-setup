@@ -2,7 +2,7 @@
 set -uo pipefail
 
 ###############################################################################
-#  Универсальный установщик сервисов v4.1
+#  Универсальный установщик сервисов v4.0
 ###############################################################################
 #  Изменения:
 #    • Убраны \Zb\Z1\Zn — чистый текст
@@ -42,6 +42,14 @@ env_esc() {
     v="${v//\"/\\\"}"
     v="${v//\$/\\\$}"
     printf '"%s"' "$v"
+}
+
+# Escape for docker-compose.yml volumes — без кавычек, просто экранирование спецсимволов
+compose_esc() {
+    local v="${1:-}"
+    # Двойные кавычки экранируем
+    v="${v//\"/\\\"}"
+    printf '%s' "$v"
 }
 
 inject_env() {
@@ -770,35 +778,34 @@ generate_compose_file() {
         _pg=$(env_esc "${PGPASSWORD:-}")
     fi
     local _www
-    _www=$(env_esc "${APACHE_WWW_PATH:-}")
+    _www=$(compose_esc "${APACHE_WWW_PATH:-}")
 
-    cat >docker-compose.yml <<'HDR'
-networks:
-  internal_network:
-    external: true
-volumes:
-HDR
-    if is_selected "postgres"; then
-        echo "  postgres_data:" >>docker-compose.yml
+    # Определяем есть ли именованные тома
+    local has_volumes=0
+    if is_selected "postgres" || is_selected "qdrant" || is_selected "ollama" || is_selected "nginx_proxy" || is_selected "portainer" || is_selected "n8n"; then
+        has_volumes=1
     fi
-    if is_selected "qdrant"; then
-        echo "  qdrant_storage:" >>docker-compose.yml
-    fi
-    if is_selected "ollama"; then
-        echo "  ollama_data:" >>docker-compose.yml
-    fi
-    if is_selected "nginx_proxy"; then
-        echo "  npm_data:" >>docker-compose.yml
-        echo "  npm_letsencrypt:" >>docker-compose.yml
-    fi
-    if is_selected "portainer"; then
-        echo "  portainer_data:" >>docker-compose.yml
-    fi
-    if is_selected "n8n"; then
-        echo "  n8n_data:" >>docker-compose.yml
-    fi
-    echo >>docker-compose.yml
-    echo "services:" >>docker-compose.yml
+
+    {
+        echo 'networks:'
+        echo '  internal_network:'
+        echo '    external: true'
+        if [[ $has_volumes -eq 1 ]]; then
+            echo 'volumes:'
+            is_selected "postgres"  && echo '  postgres_data:'
+            is_selected "qdrant"    && echo '  qdrant_storage:'
+            is_selected "ollama"    && echo '  ollama_data:'
+            if is_selected "nginx_proxy"; then
+                echo '  npm_data:'
+                echo '  npm_letsencrypt:'
+            fi
+            is_selected "portainer" && echo '  portainer_data:'
+            is_selected "n8n"       && echo '  n8n_data:'
+        else
+            echo 'volumes: {}'
+        fi
+        echo 'services:'
+    } >docker-compose.yml
 
     # --- PostgreSQL ---
     if is_selected "postgres"; then
