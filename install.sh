@@ -628,7 +628,54 @@ install_docker() {
         apt-get install -y docker-compose-plugin >/dev/null 2>&1
     fi
     log "Docker ready"
+    verify_docker
 }
+
+# Проверяем что Docker реально работает (pull + create)
+# Если containerd повреждён — чиним автоматически
+verify_docker() {
+    local tmp_verify="$TMP"
+    if docker pull hello-world >"$tmp_verify" 2>&1; then
+        docker rm hello-world >/dev/null 2>&1 || true
+        log "Docker verified OK"
+        return 0
+    fi
+
+    log "Docker verification FAILED — attempting auto-repair"
+
+    # Если ошибка "failed to lease content" — это баг containerd
+    if grep -qi "failed to lease" "$tmp_verify" 2>/dev/null; then
+
+        dialog --title "Ремонт Docker" --msgbox "Найдена проблема containerd.\nСейчас будет автоматически исправлена." 8 60
+
+        systemctl stop docker 2>/dev/null || true
+        systemctl stop containerd 2>/dev/null || true
+
+        # Удаляем повреждённые состояния containerd
+        rm -rf /var/lib/containerd/io.containerd.metadata.v1.bolt/* 2>/dev/null || true
+        rm -rf /var/lib/containerd/state/* 2>/dev/null || true
+        rm -rf /var/lib/containerd/tmpmounts/* 2>/dev/null || true
+
+        systemctl start containerd 2>/dev/null || true
+        sleep 2
+        systemctl start docker 2>/dev/null || true
+        sleep 3
+        dockerd --version &>/dev/null || true
+
+        # Повторная проверка
+        if docker pull hello-world >"$tmp_verify" 2>&1; then
+            docker rm hello-world >/dev/null 2>&1 || true
+            log "Docker repaired and verified OK"
+            dialog --msgbox "Docker успешно починен и работает." 6 50
+            return 0
+        fi
+    fi
+
+    # Если всё ещё не работает — показываем ошибку
+    log "ERROR: Docker still broken after auto-repair"
+    cat "$tmp_verify" >> "$LOG_FILE" 2>/dev/null || true
+    dialog --title "Ошибка Docker" --textbox "$tmp_verify" 20 80
+    exit 1
 
 ###############################################################################
 #  СЕТЬ + .env
