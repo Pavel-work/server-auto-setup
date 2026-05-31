@@ -676,6 +676,7 @@ verify_docker() {
     cat "$tmp_verify" >> "$LOG_FILE" 2>/dev/null || true
     dialog --title "Ошибка Docker" --textbox "$tmp_verify" 20 80
     exit 1
+}
 
 ###############################################################################
 #  СЕТЬ + .env
